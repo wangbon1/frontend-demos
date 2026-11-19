@@ -1,0 +1,322 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>精灵表工具 · 拼图 / 切帧 / 预览</title>
+<style>
+  :root{--bg:#0f1117;--panel:#191d26;--line:#2a3040;--ink:#e9ecf3;--dim:#8b93a7;--accent:#ffd166;--ok:#4ade80}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.6 -apple-system,"Segoe UI","Microsoft YaHei",sans-serif;padding:18px}
+  h1{font-size:17px;margin:0 0 3px;font-weight:600}
+  .sub{color:var(--dim);font-size:12px;margin-bottom:14px}
+  .wrap{max-width:1080px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px;margin-bottom:14px}
+  .drop{border:2px dashed var(--line);border-radius:10px;padding:26px;text-align:center;color:var(--dim);cursor:pointer;transition:.15s}
+  .drop.hot{border-color:var(--accent);color:var(--accent);background:#1f232e}
+  .row{display:flex;gap:14px;flex-wrap:wrap;align-items:center;margin:10px 0}
+  label.f{font-size:12.5px;color:var(--dim);display:flex;align-items:center;gap:6px}
+  input[type=number]{width:64px;background:#0f1117;color:var(--ink);border:1px solid var(--line);border-radius:6px;padding:5px 7px}
+  input[type=range]{accent-color:var(--accent)}
+  button{background:var(--accent);color:#101216;border:0;border-radius:7px;padding:8px 16px;font-size:13.5px;font-weight:600;cursor:pointer}
+  button:disabled{opacity:.4;cursor:not-allowed}
+  button.ghost{background:transparent;color:var(--dim);border:1px solid var(--line);font-weight:400}
+  canvas{max-width:100%;display:block;border-radius:6px;background:
+    repeating-conic-gradient(#1a1e28 0 25%,#141821 0 50%) 50%/16px 16px}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  @media(max-width:820px){.grid2{grid-template-columns:1fr}}
+  .stat{font-size:12px;color:var(--dim);margin-top:8px;min-height:18px}
+  .stat b{color:var(--ok);font-weight:600}
+  .thumbs{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+  .thumbs img{width:44px;height:44px;object-fit:contain;background:#0f1117;border:1px solid var(--line);border-radius:4px}
+  .note{color:var(--dim);font-size:11.5px;line-height:1.7;margin-top:10px}
+  .note b{color:var(--ink)}
+  code{background:#0b0d12;padding:1px 5px;border-radius:4px;color:#a5d8ff;font-size:11.5px}
+  .sel{background:#0f1117;color:var(--ink);border:1px solid var(--line);border-radius:6px;padding:5px 7px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>精灵表工具 · 拼图 / 切帧 / 预览</h1>
+<div class="sub">做游戏要角色动画，就这两件事：把单帧拼成一张精灵表，或者把别人给的精灵表切回单帧。全程本地，不上传。</div>
+
+<!-- 模式 -->
+<div class="card">
+  <div class="row">
+    <label class="f"><input type="radio" name="mode" value="pack" checked> 拼图：多张单帧 → 一张精灵表</label>
+    <label class="f"><input type="radio" name="mode" value="slice"> 切帧：一张精灵表 → 单帧</label>
+  </div>
+  <div class="drop" id="drop">
+    <div id="dropText">把图片拖到这里，或点击选择</div>
+    <input type="file" id="file" accept="image/*" multiple hidden>
+  </div>
+  <div class="thumbs" id="thumbs"></div>
+  <div class="stat" id="stat"></div>
+</div>
+
+<!-- 参数 -->
+<div class="card">
+  <div class="row">
+    <label class="f">列 <input type="number" id="cols" value="3" min="1" max="20"></label>
+    <label class="f">行 <input type="number" id="rows" value="3" min="1" max="20"></label>
+    <label class="f"><input type="checkbox" id="transparent" checked> 透明背景</label>
+    <label class="f">导出缩放 <input type="range" id="scale" min="0.25" max="2" step="0.05" value="1"><output id="scaleV">1.00×</output></label>
+    <label class="f">预览帧率 <input type="range" id="fps" min="1" max="24" step="1" value="9"><output id="fpsV">9</output></label>
+  </div>
+  <div class="row">
+    <button id="build">生成精灵表</button>
+    <button id="download" disabled>下载精灵表 PNG</button>
+    <button class="ghost" id="play" disabled>播放预览</button>
+    <button class="ghost" id="clear">清空</button>
+  </div>
+  <div class="stat" id="stat2"></div>
+</div>
+
+<div class="grid2">
+  <div class="card"><div style="font-size:12.5px;color:var(--dim);margin-bottom:8px">精灵表 <span id="sheetInfo"></span></div>
+    <canvas id="sheet"></canvas></div>
+  <div class="card"><div style="font-size:12.5px;color:var(--dim);margin-bottom:8px">动画预览 <span id="playInfo"></span></div>
+    <canvas id="preview" width="260" height="260"></canvas>
+    <div class="row" style="margin-top:8px">
+      <button class="ghost" id="saveFrame" disabled>保存当前帧 PNG</button>
+    </div>
+  </div>
+</div>
+
+<div class="note">
+  <b>典型用法（做游戏）</b>：① 找一套现成序列帧（或自己画 9 张）；② 拖进来，列 3 行 3，点「生成精灵表」；③ 下载 PNG，放进游戏里，代码里按 <code>帧号 % 3</code> 和 <code>⌊帧号 / 3⌋</code> 取格子。<br>
+  <b>典型用法（用别人的素材）</b>：手上有现成的精灵表但不知道怎么用 → 切到「切帧」模式，填入它的行列数，就能一帧一帧看、逐帧保存。<br>
+  <b>判好坏的土办法</b>：点「播放预览」，帧率调到 9（9 帧 ≈ 1 秒）。**动作卡顿 = 帧数不够或顺序错**，跟美术水平没关系。<br>
+  <b>边界（别当它全能）</b>：不做 GIF（要 GIF 用 ScreenToGif 或微信自带）；不做去背景/抠图；不改像素尺寸以外的画质；大图（>4000px）会慢。
+</div>
+
+</div>
+
+<script>
+(() => {
+  const $ = id => document.getElementById(id);
+  const fileInput = $('file'), drop = $('drop'), thumbs = $('thumbs');
+  const sheetCanvas = $('sheet'), previewCanvas = $('preview');
+  const pctx = previewCanvas.getContext('2d');
+  let frames = [];        // 模式A：单帧图（Image 或 canvas）
+  let sheet = null;       // 模式B：切出来的一张表
+  let cells = [];         // 切帧结果
+  let timer = null, curFrame = 0;
+
+  const mode = () => document.querySelector('input[name=mode]:checked').value;
+
+  // ---------------- 读取 ----------------
+  function loadFiles(list) {
+    const imgs = [...list].filter(f => f.type.startsWith('image/'));
+    if (!imgs.length) return;
+    let pending = imgs.length;
+    const got = new Array(imgs.length);
+    imgs.forEach((f, i) => {
+      const img = new Image();
+      img.onload = () => { got[i] = img; if (--pending === 0) accept(got); };
+      img.onerror = () => { if (--pending === 0) accept(got.filter(Boolean)); };
+      img.src = URL.createObjectURL(f);
+    });
+  }
+  function accept(imgs) {
+    if (mode() === 'slice') {
+      // 切帧模式：只用第一张
+      sheet = imgs[0];
+      $('stat').innerHTML = `已载入精灵表：<b>${sheet.width}×${sheet.height}</b>（切帧模式只用第一张）`;
+      cells = [];
+      renderThumbs([]);
+      autoGuess(sheet);
+    } else {
+      frames = imgs;
+      $('stat').innerHTML = `已载入 <b>${frames.length}</b> 帧`;
+      renderThumbs(frames);
+      // 自动把行列调成接近方形
+      const n = frames.length;
+      const c = Math.ceil(Math.sqrt(n));
+      $('cols').value = c;
+      $('rows').value = Math.ceil(n / c);
+    }
+    syncUI();
+  }
+  function autoGuess(img) {
+    // 常见精灵表宽度是高度的整数倍，给个建议值
+    const c = +$('cols').value, r = +$('rows').value;
+    if (img.width % c !== 0 || img.height % r !== 0) {
+      $('stat').innerHTML += `<br>⚠️ 当前 ${c}×${r} 除不尽（${img.width}×${img.height}），切出来的格子会有拉伸。图宽高能被行列整除才干净。`;
+    }
+  }
+  function renderThumbs(arr) {
+    thumbs.innerHTML = '';
+    arr.slice(0, 30).forEach(src => {
+      const i = document.createElement('img');
+      i.src = src.src || (src.toDataURL ? src.toDataURL() : '');
+      thumbs.appendChild(i);
+    });
+  }
+
+  drop.addEventListener('click', () => fileInput.click());
+  fileInput.addEventListener('change', e => loadFiles(e.target.files));
+  ['dragenter','dragover'].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.add('hot'); }));
+  ['dragleave','drop'].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.remove('hot'); }));
+  drop.addEventListener('drop', e => loadFiles(e.dataTransfer.files));
+
+  document.querySelectorAll('input[name=mode]').forEach(r =>
+    r.addEventListener('change', () => { frames = []; cells = []; sheet = null; thumbs.innerHTML=''; $('stat').textContent=''; syncUI(); }));
+
+  // ---------------- 拼图 ----------------
+  function buildSheet() {
+    const cols = Math.max(1, +$('cols').value), rows = Math.max(1, +$('rows').value);
+    const scale = +$('scale').value;
+    const trans = $('transparent').checked;
+
+    if (mode() === 'pack') {
+      if (!frames.length) return null;
+      // 每个格子取所有帧里的最大宽高，保持不拉伸
+      const cw = Math.max(...frames.map(f => f.width));
+      const ch = Math.max(...frames.map(f => f.height));
+      const cv = document.createElement('canvas');
+      cv.width  = Math.round(cols * cw * scale);
+      cv.height = Math.round(rows * ch * scale);
+      const g = cv.getContext('2d');
+      if (!trans) { g.fillStyle = '#ffffff'; g.fillRect(0, 0, cv.width, cv.height); }
+      g.imageSmoothingEnabled = false;
+      frames.forEach((f, i) => {
+        if (i >= cols * rows) return;
+        const cx = (i % cols) * cw * scale;
+        const cy = Math.floor(i / cols) * ch * scale;
+        // 格子内居中
+        const ox = cx + (cw * scale - f.width * scale) / 2;
+        const oy = cy + (ch * scale - f.height * scale) / 2;
+        g.drawImage(f, ox, oy, f.width * scale, f.height * scale);
+      });
+      return cv;
+    }
+
+    // 切帧模式：产出每帧 canvas
+    if (!sheet) return null;
+    const fw = Math.floor(sheet.width / cols), fh = Math.floor(sheet.height / rows);
+    cells = [];
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) {
+        const cv = document.createElement('canvas');
+        cv.width = Math.round(fw * scale); cv.height = Math.round(fh * scale);
+        const g = cv.getContext('2d');
+        g.imageSmoothingEnabled = false;
+        g.drawImage(sheet, c * fw, r * fh, fw, fh, 0, 0, cv.width, cv.height);
+        cells.push(cv);
+      }
+    }
+    return { sliced: true, count: cells.length, fw, fh };
+  }
+
+  function drawSheet(result) {
+    if (!result) return;
+    if (result.sliced) {
+      // 切帧模式：把切出来的格子再排一次，让人看清边界
+      const cols = Math.max(1, +$('cols').value), rows = Math.max(1, +$('rows').value);
+      sheetCanvas.width = cols * cells[0].width;
+      sheetCanvas.height = rows * cells[0].height;
+      const g = sheetCanvas.getContext('2d');
+      g.clearRect(0, 0, sheetCanvas.width, sheetCanvas.height);
+      cells.forEach((c, i) => {
+        g.drawImage(c, (i % cols) * c.width, Math.floor(i / cols) * c.height);
+      });
+      $('sheetInfo').textContent = `｜切出 ${cells.length} 帧，每帧 ${result.fw}×${result.fh}`;
+      $('stat2').innerHTML = `切帧完成：<b>${cells.length}</b> 帧，单帧 ${result.fw}×${result.fh}`;
+      $('saveFrame').disabled = false;
+    } else {
+      sheetCanvas.width = result.width; sheetCanvas.height = result.height;
+      const g = sheetCanvas.getContext('2d');
+      g.clearRect(0, 0, result.width, result.height);
+      g.drawImage(result, 0, 0);
+      $('sheetInfo').textContent = `｜${result.width}×${result.height}`;
+      $('stat2').innerHTML = `精灵表已生成：<b>${result.width}×${result.height}</b>`;
+      $('download').disabled = false;
+    }
+    startPlay();
+  }
+
+  // ---------------- 预览 ----------------
+  function startPlay() {
+    stopPlay();
+    const cols = Math.max(1, +$('cols').value), rows = Math.max(1, +$('rows').value);
+    const src = (mode() === 'slice') ? cells : (sheetCanvas.width ? sheetCanvas : null);
+    const total = (mode() === 'slice') ? cells.length : frames.length;
+    if (!total) return;
+    $('play').disabled = false;
+    if (mode() === 'pack') {
+      // 拼图模式预览：直接从 frames 逐帧画（比从精灵表反切干净）
+      timer = setInterval(() => {
+        curFrame = (curFrame + 1) % frames.length;
+        drawPreviewFrame(frames[curFrame]);
+      }, 1000 / +$('fps').value);
+      $('playInfo').textContent = `｜${frames.length} 帧 @ ${$('fps').value}fps`;
+    } else {
+      timer = setInterval(() => {
+        curFrame = (curFrame + 1) % cells.length;
+        drawPreviewFrame(cells[curFrame]);
+      }, 1000 / +$('fps').value);
+      $('playInfo').textContent = `｜${cells.length} 帧 @ ${$('fps').value}fps`;
+    }
+  }
+  function drawPreviewFrame(img) {
+    pctx.clearRect(0, 0, previewCanvas.width, previewCanvas.height);
+    if (!img) return;
+    const s = Math.min(previewCanvas.width / img.width, previewCanvas.height / img.height);
+    const w = img.width * s, h = img.height * s;
+    pctx.imageSmoothingEnabled = false;
+    pctx.drawImage(img, (previewCanvas.width - w) / 2, (previewCanvas.height - h) / 2, w, h);
+  }
+  function stopPlay() { if (timer) { clearInterval(timer); timer = null; } }
+
+  // ---------------- 导出 ----------------
+  function downloadCanvas(cv, name) {
+    cv.toBlob(b => {
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(b);
+      a.download = name;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 3000);
+    }, 'image/png');
+  }
+
+  $('build').addEventListener('click', () => {
+    const r = buildSheet();
+    if (!r) { $('stat2').textContent = '先载入图片'; return; }
+    drawSheet(r);
+  });
+  $('download').addEventListener('click', () => downloadCanvas(sheetCanvas, 'spritesheet.png'));
+  $('saveFrame').addEventListener('click', () => {
+    if (!cells.length) return;
+    downloadCanvas(cells[curFrame % cells.length], `frame-${String(curFrame % cells.length).padStart(2, '0')}.png`);
+  });
+  $('play').addEventListener('click', () => { timer ? (stopPlay(), $('play').textContent = '播放预览') : (startPlay(), $('play').textContent = '暂停'); });
+  $('clear').addEventListener('click', () => {
+    stopPlay(); frames = []; cells = []; sheet = null; thumbs.innerHTML = '';
+    $('stat').textContent = ''; $('stat2').textContent = ''; $('sheetInfo').textContent = ''; $('playInfo').textContent = '';
+    sheetCanvas.width = 1; sheetCanvas.height = 1;
+    pctx.clearRect(0, 0, previewCanvas.width, previewCanvas.height);
+    $('download').disabled = true; $('saveFrame').disabled = true;
+  });
+  $('scale').addEventListener('input', e => $('scaleV').textContent = (+e.target.value).toFixed(2) + '×');
+  $('fps').addEventListener('input', e => { $('fpsV').textContent = e.target.value; if (timer) startPlay(); });
+  function syncUI() {
+    $('download').disabled = !(mode() === 'pack' && frames.length);
+    $('saveFrame').disabled = !cells.length;
+  }
+  syncUI();
+
+  // 自测入口（给自动化验证用，正常使用不需要）
+  window.__sprite = {
+    buildSheet, drawPreviewFrame,
+    getFrames: () => frames, getCells: () => cells,
+    setFrames: (arr) => { frames = arr; },
+    setSheet: (img) => { sheet = img; },
+    getSheet: () => sheet,
+    sheetCanvas, previewCanvas, stopPlay
+  };
+})();
+</script>
+</body>
+</html>

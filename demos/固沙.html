@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>固沙 · 最小可玩原型 v2</title>
+<style>
+  :root { --bg:#12100e; --panel:#1c1916; --ink:#f2ece2; --mute:#9a8f80; --sand:#c8a45c; --tree:#4c9a3f; --water:#4a8fd4; }
+  * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  body { margin:0; min-height:100vh; display:flex; flex-direction:column; align-items:center; justify-content:center;
+         background:radial-gradient(circle at 50% 20%, #201c17, var(--bg) 70%); color:var(--ink);
+         font-family:"Segoe UI",system-ui,"Microsoft YaHei",sans-serif; user-select:none; padding:16px; }
+  h1 { margin:0 0 4px; font-size:20px; letter-spacing:2px; font-weight:600; }
+  .sub { color:var(--mute); font-size:12px; margin-bottom:12px; }
+  #hud { display:flex; gap:18px; font-size:13px; margin-bottom:8px; font-variant-numeric:tabular-nums; }
+  #hud b { font-weight:600; }
+  .w { color:var(--water); } .s { color:var(--sand); } .t { color:var(--tree); }
+  canvas { background:#262019; border-radius:8px; box-shadow:0 10px 40px rgba(0,0,0,.5); touch-action:manipulation; cursor:crosshair; }
+  #overlay { position:fixed; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center;
+             background:rgba(10,9,8,.88); backdrop-filter:blur(3px); text-align:center; padding:24px; }
+  #overlay.hide { display:none; }
+  #overlay h2 { margin:0 0 10px; font-size:26px; }
+  #overlay p { margin:4px 0; color:var(--mute); font-size:14px; line-height:1.8; max-width:430px; }
+  button { margin-top:18px; padding:11px 28px; font-size:15px; border:0; border-radius:6px; cursor:pointer;
+           background:var(--tree); color:#0d1a0b; font-weight:700; letter-spacing:1px; }
+  button:active { transform:translateY(1px); }
+  .tip { margin-top:14px; color:var(--mute); font-size:12px; line-height:1.8; text-align:center; }
+  .tip b { color:var(--ink); }
+</style>
+</head>
+<body>
+<h1>固 沙</h1>
+<div class="sub">每行沙各自往右推 · 点空地种树挡它一次 · 守住 90 秒</div>
+<div id="hud">
+  <span>水 <b class="w" id="hWater">40</b></span>
+  <span>时间 <b id="hTime">0.0</b>s</span>
+  <span>沙化 <b class="s" id="hSand">0</b>%</span>
+  <span>树 <b class="t" id="hTree">0</b></span>
+</div>
+<canvas id="cv"></canvas>
+<div class="tip">想改手感：打开文件搜 <b>★ CONFIG</b>，或浏览器控制台里 <b>CONFIG.TICK_MS = 2000</b></div>
+
+<div id="overlay">
+  <h2>固 沙</h2>
+  <p>沙在<b>每一行</b>各推各的。<br>点空地种一棵树（10 水），它能挡住那一行的一次推进，然后自己消失。<br>哪一行空着，沙就从哪一行往前走。<br>守住 <b>90 秒</b>。</p>
+  <button id="btn">开 始</button>
+</div>
+
+<script>
+/* ★ CONFIG —— 想改手感就改这里，每行都写了"改大会怎样" */
+const CONFIG = {
+  COLS: 12,            // 列数：改大 = 场地更长，沙要走更久（变简单）
+  ROWS: 9,             // 行数：改大 = 要照看更多行（变难）
+  CELL: 44,            // 每格像素：只影响观感
+  TICK_MS: 5000,       // 每多少毫秒推一列：改小 = 沙快（变难）★ 最影响难度
+  WIN_SEC: 90,         // 守住多少秒算过：改小 = 更早过关
+  LOSE_RATIO: 0.65,    // 沙占到多少比例就输：改大 = 更宽容
+  START_WATER: 40,     // 开局水：改大 = 开局能铺更多树
+  TREE_COST: 10,       // 一棵树多少水：改小 = 更便宜
+  WATER_REGEN: 3,      // 每秒回多少水
+  REGEN_MS: 1000,      // 回水间隔：改小 = 水来得快
+  START_SAND_COLS: 1,  // 开局沙占几列：最小 1
+};
+
+const cv = document.getElementById('cv');
+const ctx = cv.getContext('2d');
+const C = CONFIG, N = C.COLS * C.ROWS;
+cv.width = C.COLS * C.CELL;
+cv.height = C.ROWS * C.CELL;
+
+const EMPTY = 0, TREE = 1, SAND = 2;
+let grid, water, elapsed, sandCount, treeCount, running, lastTick, lastRegen, t0;
+let sandFront = 0;
+
+const overlay = document.getElementById('overlay');
+const btn = document.getElementById('btn');
+
+const idx = (c, r) => r * C.COLS + c;
+
+function reset() {
+  grid = new Uint8Array(N);
+  water = C.START_WATER; elapsed = 0; sandCount = 0; treeCount = 0;
+  running = false; lastTick = 0; lastRegen = 0; t0 = 0;
+  for (let c = 0; c < C.START_SAND_COLS; c++)
+    for (let r = 0; r < C.ROWS; r++) { grid[idx(c, r)] = SAND; sandCount++; }
+  sandFront = C.START_SAND_COLS - 1;
+  draw(); hud();
+}
+
+function hud() {
+  document.getElementById('hWater').textContent = water;
+  document.getElementById('hTime').textContent = elapsed.toFixed(1);
+  document.getElementById('hSand').textContent = Math.round(sandCount / N * 100);
+  document.getElementById('hTree').textContent = treeCount;
+}
+
+/* 核心机制：**整列推进 + 树逐棵消耗**
+   1. 沙锋在 sandFront 列，下一次想吞 sandFront+1 列
+   2. 如果那一列有树 → 只吃掉一棵树，这一 tick 被挡住（沙不前进）
+   3. 如果那一列没树 → 整列变沙，沙锋 +1
+   → 一列 9 棵树 = 9 tick 的延迟。玩家要算"水和时间"。 */
+function sandStep() {
+  const next = sandFront + 1;
+  if (next >= C.COLS) return 0;
+  const trees = [];
+  for (let r = 0; r < C.ROWS; r++) if (grid[idx(next, r)] === TREE) trees.push(r);
+  if (trees.length) {
+    const r = trees[(Math.random() * trees.length) | 0];
+    grid[idx(next, r)] = EMPTY; treeCount--;
+    return 0;                       // 被挡
+  }
+  for (let r = 0; r < C.ROWS; r++) {
+    const i = idx(next, r);
+    if (grid[i] !== SAND) { grid[i] = SAND; sandCount++; }
+  }
+  sandFront = next;
+  return 1;
+}
+
+function draw() {
+  ctx.clearRect(0, 0, cv.width, cv.height);
+  for (let r = 0; r < C.ROWS; r++) {
+    for (let c = 0; c < C.COLS; c++) {
+      const x = c * C.CELL, y = r * C.CELL, v = grid[idx(c, r)];
+      ctx.fillStyle = v === SAND ? '#c8a45c' : '#2b241d';
+      ctx.fillRect(x + 1, y + 1, C.CELL - 2, C.CELL - 2);
+      if (v === TREE) {
+        ctx.fillStyle = '#4c9a3f';
+        ctx.beginPath(); ctx.arc(x + C.CELL / 2, y + C.CELL / 2, C.CELL * 0.30, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = '#3a7a30';
+        ctx.fillRect(x + C.CELL / 2 - 2, y + C.CELL * 0.70, 4, C.CELL * 0.18);
+      }
+    }
+  }
+}
+
+function loop(ts) {
+  if (!running) return;
+  if (!t0) { t0 = ts; lastTick = ts; lastRegen = ts; }
+  elapsed = (ts - t0) / 1000;
+  if (ts - lastRegen > C.REGEN_MS) { water = Math.min(999, water + C.WATER_REGEN); lastRegen = ts; }
+  if (ts - lastTick > C.TICK_MS) {
+    lastTick = ts;
+    sandStep(); draw(); hud();
+    if (sandCount / N >= C.LOSE_RATIO) return end(false);
+    if (elapsed >= C.WIN_SEC) return end(true);
+  } else hud();
+  requestAnimationFrame(loop);
+}
+
+function end(win) {
+  running = false;
+  overlay.classList.remove('hide');
+  overlay.querySelector('h2').textContent = win ? '守 住 了' : '被 埋 了';
+  overlay.querySelector('p').innerHTML = win
+    ? `坚持 ${elapsed.toFixed(1)} 秒，沙化只到 ${Math.round(sandCount / N * 100)}%。<br>试试把 <b>TICK_MS</b> 改成 3000 再来。`
+    : `坚持 ${elapsed.toFixed(1)} 秒，沙化 ${Math.round(sandCount / N * 100)}%。<br>下次盯住"哪一行空着"——沙只会从没树的那行走。`;
+  btn.textContent = '再 来 一 次';
+}
+
+function start() {
+  reset();
+  overlay.classList.add('hide');
+  running = true;
+  requestAnimationFrame(loop);
+}
+
+function plantAt(ev) {
+  if (!running) return;
+  const rect = cv.getBoundingClientRect();
+  const px = (ev.clientX ?? ev.touches[0].clientX) - rect.left;
+  const py = (ev.clientY ?? ev.touches[0].clientY) - rect.top;
+  const c = Math.floor(px / (rect.width / C.COLS));
+  const r = Math.floor(py / (rect.height / C.ROWS));
+  if (c < 0 || c >= C.COLS || r < 0 || r >= C.ROWS) return;
+  const i = idx(c, r);
+  if (grid[i] !== EMPTY || water < C.TREE_COST) return;
+  grid[i] = TREE; water -= C.TREE_COST; treeCount++;
+  draw(); hud();
+}
+cv.addEventListener('pointerdown', e => { e.preventDefault(); plantAt(e); });
+btn.addEventListener('click', start);
+
+/* 调试口（控制台可用）：__dbg.tick(5) 立刻推进 5 次；CONFIG 可实时改 */
+window.CONFIG = CONFIG;
+window.__dbg = {
+  tick: n => { for (let i = 0; i < n; i++) sandStep(); draw(); hud(); return __dbg.state(); },
+  state: () => ({ sand: sandCount, tree: treeCount, water, total: N, elapsed, front: sandFront }),
+  plant: (c, r) => { const i = idx(c, r); if (grid[i] === EMPTY && water >= C.TREE_COST) { grid[i] = TREE; water -= C.TREE_COST; treeCount++; draw(); hud(); } return treeCount; },
+  addWater: n => { water += n; hud(); return water; },
+  fillColumn: c => { let n = 0; for (let rr = 0; rr < C.ROWS; rr++) { const before = treeCount; __dbg.plant(c, rr); if (treeCount > before) n++; } return n; },
+};
+
+reset();
+</script>
+</body>
+</html>

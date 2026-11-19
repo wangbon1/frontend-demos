@@ -1,0 +1,362 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>打击感6帧 · 参数实验台</title>
+<style>
+  :root{
+    --bg:#12141a; --panel:#1a1d26; --line:#2b3040; --ink:#e8ebf2; --dim:#8b93a7;
+    --accent:#ffd166; --a:#4cc9f0; --b:#f72585;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:14px/1.6 -apple-system,"Segoe UI","Microsoft YaHei",sans-serif;padding:18px}
+  h1{font-size:17px;margin:0 0 2px;font-weight:600}
+  .sub{color:var(--dim);font-size:12px;margin-bottom:14px}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;max-width:880px}
+  @media(max-width:720px){.grid{grid-template-columns:1fr}}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:10px}
+  .card h2{font-size:13px;margin:0 0 8px;font-weight:600;display:flex;justify-content:space-between}
+  .card h2 span{font-weight:400;font-size:11px;color:var(--dim)}
+  canvas{width:100%;height:auto;display:block;border-radius:6px;background:#0b0d12}
+  .ctrl{background:var(--panel);border:1px solid var(--line);border-radius:10px;
+    padding:12px 14px;max-width:880px;margin-top:14px}
+  .row{display:grid;grid-template-columns:150px 1fr 62px;align-items:center;gap:10px;margin:7px 0}
+  .row label{font-size:12.5px;color:var(--dim)}
+  .row output{font-size:12.5px;color:var(--accent);text-align:right;font-variant-numeric:tabular-nums}
+  input[type=range]{width:100%;accent-color:var(--accent)}
+  .btns{display:flex;gap:10px;margin-top:12px;flex-wrap:wrap;align-items:center}
+  button{background:var(--accent);color:#101216;border:0;border-radius:7px;
+    padding:9px 20px;font-size:14px;font-weight:600;cursor:pointer}
+  button:active{transform:translateY(1px)}
+  button.ghost{background:transparent;color:var(--dim);border:1px solid var(--line);font-weight:400}
+  .note{color:var(--dim);font-size:11.5px;margin-top:10px;line-height:1.7}
+  .note b{color:var(--ink);font-weight:600}
+  code{background:#0b0d12;padding:1px 5px;border-radius:4px;font-size:11.5px;color:#a5d8ff}
+</style>
+</head>
+<body>
+
+<h1>打击感 6 帧 · 参数实验台</h1>
+<div class="sub">同一个挥刀动作，左：不做任何处理　右：照下面的参数做。拖滑块看差别。</div>
+
+<div class="grid">
+  <div class="card"><h2>① 没有 hitstop<span>只有位移+闪白，不冻结</span></h2>
+    <canvas id="cA" width="760" height="440"></canvas></div>
+  <div class="card"><h2>② 有 hitstop<span>参数实时生效</span></h2>
+    <canvas id="cB" width="760" height="440"></canvas></div>
+</div>
+
+<div class="ctrl">
+  <div class="row"><label>命中冻结 hitstop</label>
+    <input type="range" id="stop" min="0" max="16" step="1" value="6"><output id="stopV">6 帧</output></div>
+  <div class="row"><label>轻击 / 重击</label>
+    <input type="range" id="kind" min="0" max="1" step="1" value="0"><output id="kindV">轻击</output></div>
+  <div class="row"><label>闪白</label>
+    <input type="range" id="flash" min="0" max="200" step="5" value="50"><output id="flashV">50 ms</output></div>
+  <div class="row"><label>镜头抖动</label>
+    <input type="range" id="shake" min="0" max="600" step="10" value="150"><output id="shakeV">150 ms</output></div>
+  <div class="row"><label>音效延迟</label>
+    <input type="range" id="snd" min="-8" max="12" step="1" value="0"><output id="sndV">0 帧</output></div>
+  <div class="btns">
+    <button id="go">挥一 刀</button>
+    <button class="ghost" id="auto">自动连砍</button>
+    <button class="ghost" id="reset">恢复推荐值</button>
+  </div>
+  <div class="note">
+    <b>推荐值来源</b>：BV1a3sZ67EYM《打击感差的不是特效，是6帧》——6 帧、轻击 3 / 重击 10、攻击方和受击方<b>一起</b>冻、闪白 50ms、镜头 150ms 内收干净、音效晚 3 帧前面全白费、加一层 60Hz 低频。<br>
+    <b>试试这三个</b>：① 把 hitstop 拖到 0，右边立刻变成左边——<b>打击感主要不在特效</b>；② 把音效延迟拖到 +12，明显发飘；拖到 0 才"咬上"；③ 把镜头抖动拖到 600ms，像地震。<br>
+    <b>局限</b>：60fps 基准；只演示 2D 近战，不含射击和远程；音效是合成方波，只为验证"对齐"这件事，不代表真实音源。
+  </div>
+</div>
+
+<script>
+(() => {
+  const A = document.getElementById('cA'), B = document.getElementById('cB');
+  const gA = A.getContext('2d'), gB = B.getContext('2d');
+  const W = A.width, H = A.height;
+  const FPS = 60, DT = 1000 / FPS;
+
+  const $ = id => document.getElementById(id);
+  const ui = {
+    stop: $('stop'), kind: $('kind'), flash: $('flash'),
+    shake: $('shake'), snd: $('snd')
+  };
+  const DEFAULTS = { stop: 6, kind: 0, flash: 50, shake: 150, snd: 0 };
+
+  function readCfg() {
+    return {
+      stop: +ui.stop.value,
+      kind: +ui.kind.value,
+      flash: +ui.flash.value,
+      shake: +ui.shake.value,
+      snd: +ui.snd.value
+    };
+  }
+  function paintLabels() {
+    const c = readCfg();
+    $('stopV').textContent = c.stop + ' 帧';
+    $('kindV').textContent = c.kind ? '重击' : '轻击';
+    $('flashV').textContent = c.flash + ' ms';
+    $('shakeV').textContent = c.shake + ' ms';
+    $('sndV').textContent = (c.snd > 0 ? '+' : '') + c.snd + ' 帧';
+  }
+  Object.values(ui).forEach(el => el.addEventListener('input', paintLabels));
+
+  // ---------- 固定步长状态机 ----------
+  // 一次挥砍的时间轴（单位：帧）
+  const WINDUP = 10;     // 抬手
+  const SWING  = 6;      // 挥出到命中
+  const CONTACT = WINDUP + SWING;  // 命中帧
+  const RECOVER = 14;    // 收招
+  const TOTAL = CONTACT + RECOVER;
+
+  class Duel {
+    constructor(ctx, withHitstop) {
+      this.ctx = ctx;
+      this.withHitstop = withHitstop;
+      this.t = -1;            // -1 = 待机
+      this.audio = null;
+      this.reset();
+    }
+    reset() {
+      this.t = -1;
+      this.hitPx = 0;        // 受击方后退
+      this.pushPx = 0;       // 攻击方前顶
+      this.stopLeft = 0;
+      this.flashLeft = 0;
+      this.shakeLeft = 0;
+      this.hitDone = false;
+      this.sndQueue = null;
+    }
+
+    // 外部：开始一刀
+    swing() { if (this.t < 0) { this.reset(); this.t = 0; } }
+
+    // 音效：方波，短促
+    beep() {
+      if (!this.audio) {
+        try { this.audio = new (window.AudioContext || window.webkitAudioContext)(); }
+        catch (e) { this.audio = null; }
+      }
+      if (!this.audio) return;
+      const ac = this.audio, now = ac.currentTime;
+      // 主击打音
+      const o = ac.createOscillator(), g = ac.createGain();
+      o.type = 'square';
+      o.frequency.setValueAtTime(180, now);
+      o.frequency.exponentialRampToValueAtTime(60, now + 0.07);
+      g.gain.setValueAtTime(0.22, now);
+      g.gain.exponentialRampToValueAtTime(0.001, now + 0.09);
+      o.connect(g).connect(ac.destination);
+      o.start(now); o.stop(now + 0.1);
+      // 60Hz 低频层
+      const o2 = ac.createOscillator(), g2 = ac.createGain();
+      o2.type = 'sine';
+      o2.frequency.setValueAtTime(60, now);
+      g2.gain.setValueAtTime(0.32, now);
+      g2.gain.exponentialRampToValueAtTime(0.001, now + 0.14);
+      o2.connect(g2).connect(ac.destination);
+      o2.start(now); o2.stop(now + 0.15);
+    }
+
+    step(cfg) {
+      if (this.t < 0) return;
+
+      // 音效队列（按帧延迟投递）
+      if (this.sndQueue !== null) {
+        if (this.sndQueue <= 0) { this.beep(); this.sndQueue = null; }
+        else this.sndQueue--;
+      }
+
+      // 帧冻结（hitstop）：冻结期间时间轴不推进
+      if (this.withHitstop && this.stopLeft > 0) {
+        this.stopLeft--;
+        // 冻结期间仍要消耗计时类效果
+        if (this.flashLeft > 0) this.flashLeft -= DT;
+        if (this.shakeLeft > 0) this.shakeLeft -= DT;
+        return;
+      }
+
+      this.t++;
+
+      // 命中帧触发
+      if (this.t === CONTACT && !this.hitDone) {
+        this.hitDone = true;
+        const heavy = cfg.kind === 1;
+        this.stopLeft = this.withHitstop
+          ? (cfg.stop > 0 ? Math.round(cfg.stop * (heavy ? 10 / 6 : 3 / 6) ) : 0)
+          : 0;
+        if (this.withHitstop && cfg.stop > 0 && this.stopLeft < 1) this.stopLeft = 1;
+
+        this.flashLeft = this.withHitstop ? cfg.flash : 0;
+        this.shakeLeft = this.withHitstop ? cfg.shake : 0;
+        this.hitPx = heavy ? 26 : 14;
+        this.pushPx = heavy ? 8 : 4;   // 攻击方"前顶一下"
+        this.sndQueue = this.withHitstop ? cfg.snd : 0;
+        if (this.sndQueue === 0) { this.beep(); this.sndQueue = null; }
+      }
+
+      // 位移缓动（冻结结束后才动）
+      this.hitPx *= 0.90;
+      this.pushPx *= 0.90;
+      if (this.flashLeft > 0) this.flashLeft -= DT;
+      if (this.shakeLeft > 0) this.shakeLeft -= DT;
+
+      if (this.t > TOTAL) this.t = -1;
+    }
+
+    draw(cfg) {
+      const g = this.ctx;
+      g.save();
+      g.clearRect(0, 0, W, H);
+
+      // 背景网格
+      g.fillStyle = '#0b0d12';
+      g.fillRect(0, 0, W, H);
+      g.strokeStyle = '#161a24'; g.lineWidth = 1;
+      for (let x = 0; x < W; x += 40) { g.beginPath(); g.moveTo(x, 0); g.lineTo(x, H); g.stroke(); }
+      for (let y = 0; y < H; y += 40) { g.beginPath(); g.moveTo(0, y); g.lineTo(W, y); g.stroke(); }
+      // 地面
+      g.strokeStyle = '#2b3040'; g.lineWidth = 2;
+      g.beginPath(); g.moveTo(0, H - 90); g.lineTo(W, H - 90); g.stroke();
+
+      // 镜头抖动
+      let sx = 0, sy = 0;
+      if (this.withHitstop && this.shakeLeft > 0) {
+        const k = Math.min(1, this.shakeLeft / Math.max(1, cfg.shake));
+        sx = (Math.random() * 2 - 1) * 9 * k;
+        sy = (Math.random() * 2 - 1) * 6 * k;
+      }
+      g.translate(sx, sy);
+
+      const groundY = H - 90;
+      const ax = 250 + this.pushPx;
+      const bx = 520 + this.hitPx;
+
+      // ---- 受击方 ----
+      g.save();
+      g.translate(bx, groundY);
+      const bodyTop = -110, bodyH = 110, bodyW = 66;
+      g.fillStyle = '#3b4256';
+      g.fillRect(-bodyW / 2, bodyTop, bodyW, bodyH);
+      // 闪白
+      if (this.flashLeft > 0) {
+        const a = Math.min(1, this.flashLeft / Math.max(1, cfg.flash));
+        g.globalAlpha = 0.92 * a;
+        g.fillStyle = '#ffffff';
+        g.fillRect(-bodyW / 2, bodyTop, bodyW, bodyH);
+        g.globalAlpha = 1;
+      }
+      g.restore();
+
+      // ---- 攻击方 + 刀 ----
+      // 角度：待机 -70°；抬手到 -110°；挥出到 +30°
+      let ang = -70;
+      if (this.t >= 0) {
+        if (this.t < WINDUP) {
+          const p = this.t / WINDUP;
+          ang = -70 - 40 * p;                     // 抬手
+        } else if (this.t < CONTACT) {
+          const p = (this.t - WINDUP) / SWING;
+          ang = -110 + 140 * p;                   // 挥出
+        } else {
+          const p = Math.min(1, (this.t - CONTACT) / RECOVER);
+          ang = 30 - 100 * p;                     // 收招
+        }
+      }
+      const rad = ang * Math.PI / 180;
+      const pivotY = groundY - 78;
+      const bladeLen = 150;
+
+      g.save();
+      g.translate(ax, groundY);
+      // 身体
+      g.fillStyle = '#4a5170';
+      g.fillRect(-30, -120, 60, 120);
+      // 刀
+      g.translate(0, -78);
+      g.rotate(rad);
+      g.strokeStyle = '#cfd6e6'; g.lineWidth = 8; g.lineCap = 'round';
+      g.beginPath(); g.moveTo(0, 0); g.lineTo(bladeLen, 0); g.stroke();
+      g.strokeStyle = '#8b93a7'; g.lineWidth = 3;
+      g.beginPath(); g.moveTo(-16, 0); g.lineTo(0, 0); g.stroke();
+      g.restore();
+
+      // 冻结提示
+      if (this.stopLeft > 0) {
+        g.fillStyle = 'rgba(255,209,102,0.95)';
+        g.font = '600 22px -apple-system,"Segoe UI",sans-serif';
+        g.fillText('FREEZE ' + this.stopLeft, 24, 44);
+      }
+      g.restore();
+
+      // 帧号 / 状态（不受抖动影响）
+      g.fillStyle = '#6f7789';
+      g.font = '12px ui-monospace,Consolas,monospace';
+      g.fillText('frame ' + (this.t < 0 ? '—' : this.t) + ' / ' + TOTAL, 16, H - 16);
+      if (!this.withHitstop) g.fillText('hitstop = 0', 16, H - 34);
+      else g.fillText('hitstop = ' + this.stopLeft + ' 剩余', 16, H - 34);
+    }
+  }
+
+  const duelA = new Duel(gA, false);
+  const duelB = new Duel(gB, true);
+
+  // ---------- 主循环 ----------
+  let acc = 0, last = performance.now();
+  function loop(now) {
+    let dt = now - last; last = now;
+    if (dt > 250) dt = 250;          // 切标签页回来别暴走
+    acc += dt;
+    let guard = 0;
+    while (acc >= DT && guard++ < 8) {
+      const cfg = readCfg();
+      duelA.step(cfg);
+      duelB.step(cfg);
+      acc -= DT;
+    }
+    const cfg = readCfg();
+    duelA.draw(cfg);
+    duelB.draw(cfg);
+    requestAnimationFrame(loop);
+  }
+  requestAnimationFrame(loop);
+
+  // ---------- 交互 ----------
+  function swingBoth() {
+    duelA.swing();
+    duelB.swing();
+  }
+  $('go').addEventListener('click', swingBoth);
+
+  let autoTimer = null;
+  $('auto').addEventListener('click', e => {
+    if (autoTimer) { clearInterval(autoTimer); autoTimer = null; e.target.textContent = '自动连砍'; return; }
+    swingBoth();
+    autoTimer = setInterval(swingBoth, 900);
+    e.target.textContent = '停止';
+  });
+
+  $('reset').addEventListener('click', () => {
+    ui.stop.value = DEFAULTS.stop;
+    ui.kind.value = DEFAULTS.kind;
+    ui.flash.value = DEFAULTS.flash;
+    ui.shake.value = DEFAULTS.shake;
+    ui.snd.value = DEFAULTS.snd;
+    paintLabels();
+  });
+
+  document.addEventListener('keydown', ev => {
+    if (ev.code === 'Space') { ev.preventDefault(); swingBoth(); }
+  });
+
+  paintLabels();
+
+  // 调试/自测入口：控制台里可以直接看两个状态机的内部帧，也方便自动化验证
+  window.__duel = { A: duelA, B: duelB, cfg: readCfg };
+})();
+</script>
+</body>
+</html>
